@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Visualization with D3.js</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            width: auto;
+            height: auto;
+            padding: 5px;
+            font: 12px sans-serif;
+            background: lightsteelblue;
+            border: 0px;
+            border-radius: 8px;
+            pointer-events: none;
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body>
+
+    <div>
+        <label for="n-select">Select n:</label>
+        <select id="n-select"></select>
+
+        <label for="m-select">Select m:</label>
+        <select id="m-select"></select>
+
+        <label for="type-select">Select graph type:</label>
+        <select id="type-select">
+            <option value="utilities">Utilities</option>
+            <option value="normalized">Normalized Utilities</option>
+            <option value="allocation">Allocation</option>
+            <option value="object_utilities">Object Utilities</option>
+        </select>
+
+        <button id="tree-map-btn">Tree Map</button>
+        
+    </div>
+
+    <div id="chart"></div>
+
+    <script>
+
+document.getElementById("tree-map-btn").addEventListener("click", function() {
+        window.location.href = "treemap.html";
+    });
+
+
+        d3.json('results/all_results.json').then(function(data) {
+            let nValues = [...new Set(data.map(d => d.n))];
+            let mValues = [...new Set(data.map(d => d.m))];
+
+            d3.select("#n-select")
+                .selectAll("option")
+                .data(nValues)
+                .enter()
+                .append("option")
+                .text(d => d)
+                .attr("value", d => d);
+
+            d3.select("#n-select").on("change", function() {
+                let selectedN = +this.value;
+                let filteredData = data.filter(d => d.n === selectedN);
+                let mValuesFiltered = [...new Set(filteredData.map(d => d.m))];
+
+                let mSelect = d3.select("#m-select");
+                mSelect.selectAll("option").remove();
+                mSelect.selectAll("option")
+                    .data(mValuesFiltered)
+                    .enter()
+                    .append("option")
+                    .text(d => d)
+                    .attr("value", d => d);
+            });
+
+            d3.select("#m-select").on("change", function() {
+                updateChart(+d3.select("#n-select").property("value"), +this.value, d3.select("#type-select").property("value"));
+            });
+
+            d3.select("#type-select").on("change", function() {
+                updateChart(+d3.select("#n-select").property("value"), +d3.select("#m-select").property("value"), this.value);
+            });
+
+            updateChart(nValues[0], mValues[0], "utilities");
+
+            function updateChart(n, m, type) {
+                let selectedData = data.filter(d => d.n === n && d.m === m)[0].results;
+                d3.select("#chart").selectAll("*").remove();
+
+                let tooltip = d3.select("body").append("div")
+                    .attr("class", "tooltip")
+                    .style("opacity", 0);
+
+                let processedData = selectedData.map(d => {
+                    if (type === "utilities") {
+                        return { ...d, values: d.utilities };
+                    } else if (type === "normalized") {
+                        let totalUtility = d3.sum(d.utilities);
+                        return { ...d, values: d.utilities.map(u => u / totalUtility) };
+                    } else if (type === "allocation") {
+                        return { ...d, values: d.allocation };
+                    } else if (type === "object_utilities") {
+                        return { ...d, values: d.objects_utilities };
+                    }
+                });
+
+                let margin = {top: 20, right: 100, bottom: 40, left: 40};
+                let width = 800 - margin.left - margin.right;
+                let height = 400 - margin.top - margin.bottom;
+
+                let svg = d3.select("#chart").append("svg")
+                    .attr("width", width + margin.left + margin.right)
+                    .attr("height", height + margin.top + margin.bottom)
+                    .append("g")
+                    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+                let xScale = d3.scaleBand()
+                    .domain(selectedData.map((d, i) => i))
+                    .range([0, width])
+                    .padding(0.1);
+
+
+                    // const maxCumulativeValue = d3.max(processedData, d => 
+                    //     d3.sum(d.values.flat())
+                    // );
+
+                    // yScale.domain([0, maxCumulativeValue]);
+
+
+                let yScale = d3.scaleLinear()
+                    .domain([0, d3.max(processedData, d => {
+                        if (type === "object_utilities") {
+                            return d3.sum(d.values.map(arr => d3.sum(arr)));
+                        }
+                        return d3.sum(d.values);
+                    })])
+                    .nice()
+                    .range([height, 0]);
+
+                let colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+
+                if (type === "object_utilities") {
+                    console.log(processedData)
+                    const barSpacing = 1; // Adjust this value for the size of the white line
+
+svg.selectAll(".bar-group")
+    .data(processedData)
+    .enter()
+    .append("g")
+    .attr("class", "bar-group")
+    .attr("transform", (d, i) => `translate(${xScale(i)}, 0)`)
+    .selectAll("rect")
+    .data(d => {
+        let cumulativeBase = 0; // Initialize cumulative base for all groups
+        return d.values.flatMap((group, j) => {
+            return group.map(u => {
+                const base = cumulativeBase;
+                cumulativeBase += u;
+                return { utility: u, color: colorScale(j), base, groupIndex: j };
+            });
+        });
+    })
+    .enter()
+    .append("rect")
+    .attr("x", 0) // All rects are aligned at the same x position
+    .attr("y", d => yScale(d.base + d.utility) + barSpacing / 2) // Adjust y position to leave space
+    .attr("height", d => (yScale(d.base) - yScale(d.utility + d.base)) - barSpacing) // Adjust height to leave space
+    .attr("width", xScale.bandwidth()) // Each rect occupies the full bandwidth of the group
+    .attr("fill", d => d.color)
+    .on("mouseover", function(event, d) {
+        d3.selectAll("rect").style("opacity", 0.3);
+        d3.select(this).style("opacity", 1);
+
+        tooltip.transition()
+            .duration(200)
+            .style("opacity", 0.9);
+        tooltip.html(`Utility: ${d.utility}<br>Agent ${d.groupIndex}`)
+            .style("left", (event.pageX + 5) + "px")
+            .style("top", (event.pageY - 28) + "px");
+    })
+    .on("mousemove", function(event) {
+        tooltip.style("left", (event.pageX + 5) + "px")
+            .style("top", (event.pageY - 28) + "px");
+    })
+    .on("mouseout", function() {
+        d3.selectAll("rect").style("opacity", 1);
+        tooltip.transition()
+            .duration(500)
+            .style("opacity", 0);
+    });
+                } else {
+                    svg.selectAll(".bar")
+                        .data(processedData)
+                        .enter()
+                        .append("g")
+                        .attr("transform", (d, i) => `translate(${xScale(i)}, 0)`)
+                        .selectAll("rect")
+                        .data(d => d.values.map((u, j) => ({utility: u, index: j, base: d3.sum(d.values.slice(0, j)), dispersion: d.dispersion, allocation: d.allocation, utilities: d.utilities})))
+                        .enter()
+                        .append("rect")
+                        .attr("x", 0)
+                        .attr("y", d => yScale(d.utility + d.base))
+                        .attr("height", d => yScale(d.base) - yScale(d.utility + d.base))
+                        .attr("width", xScale.bandwidth())
+                        .attr("fill", d => colorScale(d.index))
+                        .on("mouseover", function(event, d) {
+                            d3.selectAll("rect").style("opacity", 0.3);
+                            d3.select(this).style("opacity", 1);
+
+                            tooltip.transition()
+                                .duration(200)
+                                .style("opacity", 0.9);
+                            tooltip.html(`Dispersion: ${d.dispersion}<br>Allocation: ${d.allocation}<br>Utilities: ${d.utilities.join(', ')}`)
+                                .style("left", (event.pageX + 5) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mousemove", function(event) {
+                            tooltip.style("left", (event.pageX + 5) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mouseout", function() {
+                            d3.selectAll("rect").style("opacity", 1);
+                            tooltip.transition()
+                                .duration(500)
+                                .style("opacity", 0);
+                        });
+                }
+
+                svg.append("g")
+                    .attr("class", "x-axis")
+                    .attr("transform", `translate(0, ${height})`)
+                    .call(d3.axisBottom(xScale));
+
+                svg.append("g")
+                    .attr("class", "y-axis")
+                    .call(d3.axisLeft(yScale));
+
+                if (type === "normalized") {
+                    let maxUtility = processedData.map(d => d3.max(d.utilities));
+                    let sumUtility = processedData.map(d => d3.sum(d.utilities));
+
+                    let yScaleMax = d3.scaleLinear()
+                        .domain([0, d3.max(maxUtility)])
+                        .nice()
+                        .range([height, 0]);
+
+                    let yScaleSum = d3.scaleLinear()
+                        .domain([0, d3.max(sumUtility)])
+                        .nice()
+                        .range([height, 0]);
+
+                    let lineMax = d3.line()
+                        .x((d, i) => xScale(i) + xScale.bandwidth() / 2)
+                        .y(d => yScaleMax(d));
+
+                    let lineSum = d3.line()
+                        .x((d, i) => xScale(i) + xScale.bandwidth() / 2)
+                        .y(d => yScaleSum(d));
+
+                    // Add max utility line
+                    let pathMax = svg.append("path")
+                        .datum(maxUtility)
+                        .attr("fill", "none")
+                        .attr("stroke", "blue")
+                        .attr("stroke-width", 2)
+                        .attr("d", lineMax)
+                        .on("mouseover", function(event, d) {
+                            d3.select(this).style("opacity", 1);
+                            tooltip.transition()
+                                .duration(200)
+                                .style("opacity", 0.9);
+                            tooltip.html(`Max Utility`)
+                                .style("left", (event.pageX + 5) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mousemove", function(event) {
+                            tooltip.style("left", (event.pageX + 5) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mouseout", function() {
+                            d3.selectAll("path").style("opacity", 1);
+                            tooltip.transition()
+                                .duration(500)
+                                .style("opacity", 0);
+                        });
+
+                    // Add sum utility line
+                    let pathSum = svg.append("path")
+                        .datum(sumUtility)
+                        .attr("fill", "none")
+                        .attr("stroke", "red")
+                        .attr("stroke-width", 2)
+                        .attr("d", lineSum)
+                        .on("mouseover", function(event, d) {
+                            d3.select(this).style("opacity", 1);
+                            tooltip.transition()
+                                .duration(200)
+                                .style("opacity", 0.9);
+                            tooltip.html(`Sum Utility`)
+                                .style("left", (event.pageX + 5) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mousemove", function(event) {
+                            tooltip.style("left", (event.pageX + 5) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mouseout", function() {
+                            d3.selectAll("path").style("opacity", 1);
+                            tooltip.transition()
+                                .duration(500)
+                                .style("opacity", 0);
+                        });
+
+                    // Add right Y axis for max utility
+                    svg.append("g")
+                        .attr("transform", `translate(${width}, 0)`)
+                        .call(d3.axisRight(yScaleMax))
+                        .append("text")
+                        .attr("text-anchor", "end")
+                        .attr("x", -height / 2)
+                        .attr("y", margin.right - 20)
+                        .attr("transform", "rotate(-90)")
+                        .attr("fill", "blue")
+                        .text("Max Utility");
+
+                    // Add right Y axis for sum utility
+                    svg.append("g")
+                        .attr("transform", `translate(${width + 40}, 0)`)
+                        .call(d3.axisRight(yScaleSum))
+                        .append("text")
+                        .attr("text-anchor", "end")
+                        .attr("x", -height / 2)
+                        .attr("y", margin.right - 60)
+                        .attr("transform", "rotate(-90)")
+                        .attr("fill", "red")
+                        .text("Sum Utility");
+                }
+            }
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Treemap</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .slider-container {
+            margin-top: 20px;
+        }
+
+        .legend {
+            display: inline-block;
+            vertical-align: top;
+            margin-left: 20px;
+        }
+
+        .legend-item {
+            margin-bottom: 5px;
+        }
+
+        .legend-color {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div>
+    <label for="n-select">Select n:</label>
+    <select id="n-select"></select>
+
+    <label for="m-select">Select m:</label>
+    <select id="m-select"></select>
+
+    <div class="slider-container">
+        <label for="dispersion-slider">Select Dispersion:</label>
+        <input type="range" id="dispersion-slider" min="0" max="0" value="0" step="1">
+        <span id="dispersion-value"></span>
+    </div>
+</div>
+
+<div style="display: flex;">
+    <div id="chart"></div>
+    <div id="legend" class="legend"></div>
+</div>
+
+
+
+<script>
+    d3.json('results/all_results.json').then(function(data) {
+        let nValues = [...new Set(data.map(d => d.n))];
+
+        d3.select("#n-select")
+            .selectAll("option")
+            .data(nValues)
+            .enter()
+            .append("option")
+            .text(d => d)
+            .attr("value", d => d);
+
+        d3.select("#n-select").on("change", updateMSelect);
+        d3.select("#m-select").on("change", updateDispersionSlider);
+        d3.select("#dispersion-slider").on("input", updateChart);
+
+        function updateMSelect() {
+            let selectedN = +d3.select("#n-select").property("value");
+
+            let mValues = [...new Set(data.filter(d => d.n === selectedN).map(d => d.m))];
+
+            let mSelect = d3.select("#m-select");
+            mSelect.selectAll("option").remove();
+
+            mSelect.selectAll("option")
+                .data(mValues)
+                .enter()
+                .append("option")
+                .text(d => d)
+                .attr("value", d => d);
+
+            updateDispersionSlider();
+        }
+
+        function updateDispersionSlider() {
+            let selectedN = +d3.select("#n-select").property("value");
+            let selectedM = +d3.select("#m-select").property("value");
+
+            let filteredData = data.filter(d => d.n === selectedN && d.m === selectedM);
+
+            if (filteredData.length > 0) {
+                let results = filteredData[0].results;
+                let maxIndex = results.length - 1;
+
+                let slider = d3.select("#dispersion-slider")
+                    .attr("max", maxIndex);
+
+                slider.on("input", function() {
+                    let selectedIndex = +this.value;
+                    d3.select("#dispersion-value").text(results[selectedIndex].dispersion);
+                    updateChart();
+                });
+
+                d3.select("#dispersion-value").text(results[0].dispersion);
+                slider.property("value", 0);
+
+                updateChart();
+            }
+        }
+
+        function updateChart() {
+            let selectedN = +d3.select("#n-select").property("value");
+            let selectedM = +d3.select("#m-select").property("value");
+            let selectedIndex = +d3.select("#dispersion-slider").property("value");
+
+            let filteredData = data.filter(d => d.n === selectedN && d.m === selectedM);
+
+            if (filteredData.length > 0) {
+                let result = filteredData[0].results[selectedIndex];
+                let objectUtilities = result.objects_utilities;
+
+                d3.select("#chart").selectAll("*").remove();
+                d3.select("#legend").selectAll("*").remove();
+
+                let margin = {top: 10, right: 10, bottom: 10, left: 10},
+                    width = 960 - margin.left - margin.right,
+                    height = 500 - margin.top - margin.bottom;
+
+                let svg = d3.select("#chart").append("svg")
+                    .attr("width", width + margin.left + margin.right)
+                    .attr("height", height + margin.top + margin.bottom)
+                    .append("g")
+                    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+                let root = d3.hierarchy({children: objectUtilities.map((group, i) => ({
+                    name: `Agent ${i + 1}`,
+                    children: group.map((value, j) => ({name: `\n ${i * group.length + j + 1}`, value: value}))
+                }))})
+                .sum(d => d.value);
+
+                d3.treemap()
+                    .size([width, height])
+                    .padding(1)(root);
+
+                let color = d3.scaleOrdinal(d3.schemeCategory10);
+
+                svg.selectAll("rect")
+                    .data(root.leaves())
+                    .enter()
+                    .append("rect")
+                    .attr("x", d => d.x0)
+                    .attr("y", d => d.y0)
+                    .attr("width", d => d.x1 - d.x0)
+                    .attr("height", d => d.y1 - d.y0)
+                    .attr("fill", d => color(d.parent.data.name));
+
+                svg.selectAll("text")
+                    .data(root.leaves())
+                    .enter()
+                    .append("text")
+                    .attr("x", d => d.x0 + 5)
+                    .attr("y", d => d.y0 + 20)
+                    .text(d => `${d.data.name}: ${d.value.toFixed(2)}`)
+                    .attr("font-size", "12px")
+                    .attr("fill", "white");
+
+                // Légende
+                let legend = d3.select("#legend");
+                root.children.forEach((group, i) => {
+                    let totalValue = group.children.reduce((sum, child) => sum + child.value, 0);
+                    let itemCount = group.children.length;
+                    let legendItem = legend.append("div").attr("class", "legend-item");
+                    legendItem.append("div")
+                        .attr("class", "legend-color")
+                        .style("background-color", color(group.data.name));
+                    legendItem.append("span")
+                        .text(`${group.data.name} - Total Utility: ${totalValue.toFixed(2)}, Objects: ${itemCount}`);
+                });
+            }
+        }
+
+        updateMSelect();
+    });
+</script>
+
+</body>
+</html>
